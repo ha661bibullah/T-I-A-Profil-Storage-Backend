@@ -14,16 +14,16 @@ const port = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// সার্ভারে আপলোড ফোল্ডার তৈরি (যদি না থাকে)
+// Create uploads directory if it doesn't exist
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// আপলোড করা ফাইলের স্ট্যাটিক সার্ভিং
+// Serve static files from uploads directory
 app.use("/uploads", express.static(uploadDir));
 
-// মুলটার কনফিগারেশন
+// Multer configuration for file uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, uploadDir);
@@ -37,17 +37,17 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB ম্যাক্স সাইজ
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max size
   fileFilter: function (req, file, cb) {
-    // শুধু ইমেজ ফাইল গ্রহণ করবে
+    // Only accept image files
     if (!file.mimetype.startsWith("image/")) {
-      return cb(new Error("শুধুমাত্র ছবি আপলোড করা যাবে"), false);
+      return cb(new Error("Only images are allowed"), false);
     }
     cb(null, true);
   },
 });
 
-// MongoDB কানেকশন
+// MongoDB connection
 const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
 
@@ -59,14 +59,14 @@ async function connectDB() {
     const db = client.db("userAuth");
     const users = db.collection("users");
 
-    // JWT টোকেন ভেরিফাই করার ফাংশন
+    // JWT token verification middleware
     function verifyToken(req, res, next) {
       const authHeader = req.headers.authorization;
 
       if (!authHeader) {
         return res.status(401).json({
           success: false,
-          message: "অনুমতি নেই",
+          message: "Authorization required",
         });
       }
 
@@ -79,12 +79,12 @@ async function connectDB() {
       } catch (error) {
         return res.status(401).json({
           success: false,
-          message: "অবৈধ টোকেন",
+          message: "Invalid token",
         });
       }
     }
 
-    // 1. টোকেন বৈধতা যাচাই API
+    // 1. Token validation API
     app.post("/validate-token", (req, res) => {
       const authHeader = req.headers.authorization;
 
@@ -108,7 +108,7 @@ async function connectDB() {
       }
     });
 
-    // 2. ব্যবহারকারীর প্রোফাইল তথ্য API
+    // 2. User profile API
     app.get("/user-profile", verifyToken, async (req, res) => {
       try {
         const userId = req.userId;
@@ -118,11 +118,11 @@ async function connectDB() {
         if (!user) {
           return res.status(404).json({
             success: false,
-            message: "ব্যবহারকারী পাওয়া যায়নি",
+            message: "User not found",
           });
         }
 
-        // পাসওয়ার্ড সরিয়ে দিন
+        // Remove password from response
         const { password, ...userWithoutPassword } = user;
 
         res.json({
@@ -133,45 +133,45 @@ async function connectDB() {
         console.error("❌ Profile fetch error:", error);
         res.status(500).json({
           success: false,
-          message: "সার্ভার এরর",
+          message: "Server error",
         });
       }
     });
 
-    // 3. প্রোফাইল ছবি আপলোড API
+    // 3. Profile picture upload API
     app.post("/upload-profile-picture", verifyToken, upload.single("profilePicture"), async (req, res) => {
       try {
         if (!req.file) {
           return res.status(400).json({
             success: false,
-            message: "কোন ফাইল পাওয়া যায়নি",
+            message: "No file provided",
           });
         }
 
-        // সার্ভারে ফাইলের পাথ
+        // File path on server
         const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
 
         res.json({
           success: true,
-          message: "ছবি সফলভাবে আপলোড হয়েছে",
+          message: "Picture uploaded successfully",
           pictureUrl: fileUrl,
         });
       } catch (error) {
         console.error("❌ Profile picture upload error:", error);
         res.status(500).json({
           success: false,
-          message: "সার্ভার এরর",
+          message: "Server error",
         });
       }
     });
 
-    // 4. প্রোফাইল আপডেট API
+    // 4. Profile update API
     app.put("/update-profile", verifyToken, async (req, res) => {
       try {
         const userId = req.userId;
         const { name, phone, birthday, gender, address, profilePicture } = req.body;
 
-        // আপডেট ডাটা
+        // Update data
         const updateData = {
           $set: {
             name: name,
@@ -179,44 +179,44 @@ async function connectDB() {
           },
         };
 
-        // অপশনাল ফিল্ড
+        // Optional fields
         if (phone) updateData.$set.phone = phone;
         if (birthday) updateData.$set.birthday = birthday;
         if (gender) updateData.$set.gender = gender;
         if (address) updateData.$set.address = address;
         if (profilePicture) updateData.$set.profilePicture = profilePicture;
 
-        // আপডেট করুন
+        // Update user
         await users.updateOne({ _id: new ObjectId(userId) }, updateData);
 
-        // আপডেট করা ব্যবহারকারীর তথ্য নিন
+        // Get updated user data
         const updatedUser = await users.findOne({ _id: new ObjectId(userId) });
 
         if (!updatedUser) {
           return res.status(404).json({
             success: false,
-            message: "ব্যবহারকারী পাওয়া যায়নি",
+            message: "User not found",
           });
         }
 
-        // পাসওয়ার্ড সরিয়ে দিন
+        // Remove password from response
         const { password, ...userWithoutPassword } = updatedUser;
 
         res.json({
           success: true,
-          message: "প্রোফাইল সফলভাবে আপডেট করা হয়েছে",
+          message: "Profile updated successfully",
           user: userWithoutPassword,
         });
       } catch (error) {
         console.error("❌ Profile update error:", error);
         res.status(500).json({
           success: false,
-          message: "সার্ভার এরর",
+          message: "Server error",
         });
       }
     });
 
-    // 5. পাসওয়ার্ড পরিবর্তন API
+    // 5. Password change API
     app.post("/change-password", verifyToken, async (req, res) => {
       try {
         const userId = req.userId;
@@ -225,35 +225,35 @@ async function connectDB() {
         if (!currentPassword || !newPassword) {
           return res.status(400).json({
             success: false,
-            message: "বর্তমান এবং নতুন পাসওয়ার্ড প্রদান করুন",
+            message: "Provide current and new password",
           });
         }
 
-        // ব্যবহারকারী খুঁজুন
+        // Find user
         const user = await users.findOne({ _id: new ObjectId(userId) });
 
         if (!user) {
           return res.status(404).json({
             success: false,
-            message: "ব্যবহারকারী পাওয়া যায়নি",
+            message: "User not found",
           });
         }
 
-        // বর্তমান পাসওয়ার্ড যাচাই করুন
+        // Verify current password
         const isMatch = await bcrypt.compare(currentPassword, user.password);
 
         if (!isMatch) {
           return res.status(400).json({
             success: false,
-            message: "বর্তমান পাসওয়ার্ড ভুল",
+            message: "Current password is incorrect",
           });
         }
 
-        // নতুন পাসওয়ার্ড হ্যাশ করুন
+        // Hash new password
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-        // পাসওয়ার্ড আপডেট করুন
+        // Update password
         await users.updateOne(
           { _id: new ObjectId(userId) },
           {
@@ -265,71 +265,71 @@ async function connectDB() {
           }
         );
 
-        // আপডেট করা ব্যবহারকারীর তথ্য নিন
+        // Get updated user data
         const updatedUser = await users.findOne({ _id: new ObjectId(userId) });
 
-        // পাসওয়ার্ড সরিয়ে দিন
+        // Remove password from response
         const { password, ...userWithoutPassword } = updatedUser;
 
         res.json({
           success: true,
-          message: "পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে",
+          message: "Password changed successfully",
           user: userWithoutPassword,
         });
       } catch (error) {
         console.error("❌ Password change error:", error);
         res.status(500).json({
           success: false,
-          message: "সার্ভার এরর",
+          message: "Server error",
         });
       }
     });
 
-    // 6. Login route - প্রথম কোড থেকে অনুরূপ
+    // 6. Login route
     app.post("/login", async (req, res) => {
       const { email, password } = req.body;
 
       if (!email || !password) {
         return res.status(400).json({
           success: false,
-          message: "ইমেইল এবং পাসওয়ার্ড প্রদান করুন",
+          message: "Email and password required",
         });
       }
 
       try {
-        // ব্যবহারকারী খুঁজুন
+        // Find user
         const user = await users.findOne({ email });
 
         if (!user) {
           return res.json({
             success: false,
-            message: "ভুল ইমেইল বা পাসওয়ার্ড",
+            message: "Incorrect email or password",
           });
         }
 
-        // পাসওয়ার্ড যাচাই করুন
+        // Verify password
         const isMatch = await bcrypt.compare(password, user.password);
 
         if (!isMatch) {
           return res.json({
             success: false,
-            message: "ভুল ইমেইল বা পাসওয়ার্ড",
+            message: "Incorrect email or password",
           });
         }
 
-        // JWT টোকেন তৈরি করুন
+        // Create JWT token
         const token = jwt.sign(
           { id: user._id },
           process.env.JWT_SECRET,
           { expiresIn: "1d" }
         );
 
-        // পাসওয়ার্ড সরিয়ে দিন
+        // Remove password from response
         const { password: userPass, ...userWithoutPassword } = user;
 
         res.json({
           success: true,
-          message: "লগইন সফল হয়েছে",
+          message: "Login successful",
           user: userWithoutPassword,
           token: token,
         });
@@ -337,38 +337,38 @@ async function connectDB() {
         console.error("❌ Login error:", error);
         res.status(500).json({
           success: false,
-          message: "সার্ভার এরর",
+          message: "Server error",
         });
       }
     });
 
-    // 7. Register route - প্রথম কোড থেকে অনুরূপ
+    // 7. Register route
     app.post("/register", async (req, res) => {
       const { name, email, password } = req.body;
       
       if (!name || !email || !password) {
         return res.status(400).json({
           success: false,
-          message: "সকল তথ্য প্রদান করুন",
+          message: "All fields are required",
         });
       }
       
       try {
-        // ইমেইল আগে থেকে আছে কিনা তা যাচাই করুন
+        // Check if email already exists
         const existingUser = await users.findOne({ email });
         
         if (existingUser) {
           return res.json({
             success: false,
-            message: "এই ইমেইল দিয়ে একাউন্ট ইতিমধ্যে আছে",
+            message: "An account with this email already exists",
           });
         }
         
-        // পাসওয়ার্ড হ্যাশ করুন
+        // Hash password
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
         
-        // ব্যবহারকারী তৈরি করুন
+        // Create user
         const result = await users.insertOne({
           name,
           email,
@@ -378,7 +378,7 @@ async function connectDB() {
           passwordLastUpdated: new Date()
         });
 
-        // JWT টোকেন তৈরি করুন
+        // Create JWT token
         const token = jwt.sign(
           { id: result.insertedId },
           process.env.JWT_SECRET,
@@ -387,7 +387,7 @@ async function connectDB() {
         
         res.json({
           success: true,
-          message: "রেজিস্ট্রেশন সফল হয়েছে",
+          message: "Registration successful",
           userId: result.insertedId,
           token: token
         });
@@ -395,29 +395,147 @@ async function connectDB() {
         console.error("❌ Registration error:", error);
         res.status(500).json({
           success: false,
-          message: "সার্ভার এরর",
+          message: "Server error",
         });
       }
     });
 
-    // স্যাম্পল টেস্ট রাউট
-    app.get("/", (req, res) => {
-      res.send("প্রোফাইল সার্ভার চালু আছে! 🚀");
+    // 8. Email check API for registration
+    app.post("/check-email", async (req, res) => {
+      const { email } = req.body;
+      
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          message: "Email is required",
+        });
+      }
+      
+      try {
+        const existingUser = await users.findOne({ email });
+        
+        return res.json({
+          exists: !!existingUser,
+          message: existingUser ? "Email already exists" : "Email is available"
+        });
+      } catch (error) {
+        console.error("❌ Email check error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Server error",
+        });
+      }
     });
 
-    // সার্ভার শুরু করুন
-    app.listen(port, () => {
-      console.log(`🚀 Server running on port ${port}`);
+    // 9. OTP send API
+    app.post("/send-otp", async (req, res) => {
+      const { email } = req.body;
+      
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          message: "Email is required",
+        });
+      }
+      
+      try {
+        // Generate a random 6-digit OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        // Store OTP in database with expiration (10 minutes)
+        await users.updateOne(
+          { email },
+          { 
+            $set: {
+              otp: otp,
+              otpExpires: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+            }
+          },
+          { upsert: true }
+        );
+        
+        // In production, send email with OTP
+        console.log(`OTP for ${email}: ${otp}`);
+        
+        res.json({
+          success: true,
+          message: "OTP sent successfully"
+        });
+      } catch (error) {
+        console.error("❌ OTP send error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Server error",
+        });
+      }
+    });
+
+    // 10. OTP verification API
+    app.post("/verify-otp", async (req, res) => {
+      const { email, otp } = req.body;
+      
+      if (!email || !otp) {
+        return res.status(400).json({
+          success: false,
+          message: "Email and OTP are required",
+        });
+      }
+      
+      try {
+        const user = await users.findOne({ 
+          email,
+          otp: otp,
+          otpExpires: { $gt: new Date() }
+        });
+        
+        if (!user) {
+          return res.json({
+            success: false,
+            message: "Invalid or expired OTP",
+          });
+        }
+        
+        // Clear OTP after successful verification
+        await users.updateOne(
+          { email },
+          { 
+            $unset: {
+              otp: "",
+              otpExpires: ""
+            }
+          }
+        );
+        
+        res.json({
+          success: true,
+          message: "OTP verified successfully"
+        });
+      } catch (error) {
+        console.error("❌ OTP verification error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Server error",
+        });
+      }
+    });
+
+    // Test route
+    app.get("/", (req, res) => {
+      res.send("Profile server is running! 🚀");
     });
   } catch (err) {
     console.error("❌ Database connection error:", err);
   }
 }
 
-// সার্ভার শুরু করুন
-connectDB();
+// Start server
+connectDB().then(() => {
+  app.listen(port, () => {
+    console.log(`🚀 Server running on port ${port}`);
+  });
+});
 
-// সার্ভার বন্ধ করার ব্যবস্থা
+// Handle server shutdown
 process.on("SIGINT", async () => {
   await client.close();
   console.log("MongoDB connection closed");
