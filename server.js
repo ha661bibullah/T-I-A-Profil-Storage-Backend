@@ -20,11 +20,10 @@ app.use(express.json({ limit: '10mb' })); // প্রোফাইল ছবি 
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // MongoDB সংযোগ
-mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://admin:Kw5FmYPNbFMtWCPS@talimulcluster.irmh5p4.mongodb.net/?retryWrites=true&w=majority&appName=TalimulCluster', {
-  useUnifiedTopology: true
-})
-.then(() => console.log('MongoDB সংযোগ সফল হয়েছে'))
-.catch(err => console.error('MongoDB সংযোগ ব্যর্থ হয়েছে:', err));
+// MongoDB সংযোগ
+mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://admin:Kw5FmYPNbFMtWCPS@talimulcluster.irmh5p4.mongodb.net/?retryWrites=true&w=majority&appName=TalimulCluster')
+  .then(() => console.log('✅ MongoDB সংযোগ সফল হয়েছে'))
+  .catch(err => console.error('❌ MongoDB সংযোগ ব্যর্থ হয়েছে:', err));
 
 // ইউজার মডেল স্কিমা
 const userSchema = new mongoose.Schema({
@@ -53,7 +52,7 @@ const authenticateToken = (req, res, next) => {
       return res.status(401).json({ message: 'অনুরোধ করা হয়েছে কিন্তু টোকেন প্রদান করা হয়নি' });
     }
     
-    jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret_key', (err, user) => {
+    jwt.verify(token, process.env.JWT_SECRET || 'jarcj72hbgwu', (err, user) => {
       if (err) {
         return res.status(403).json({ message: 'টোকেন অবৈধ বা মেয়াদ শেষ হয়েছে' });
       }
@@ -93,7 +92,7 @@ app.post('/api/register', async (req, res) => {
     // JWT টোকেন তৈরি করুন
     const token = jwt.sign(
       { id: newUser._id, email: newUser.email },
-      process.env.JWT_SECRET || 'your_jwt_secret_key',
+      process.env.JWT_SECRET || 'jarcj72hbgwu',
       { expiresIn: '7d' }
     );
     
@@ -141,7 +140,7 @@ app.post('/api/login', async (req, res) => {
     // JWT টোকেন তৈরি করুন
     const token = jwt.sign(
       { id: user._id, email: user.email },
-      process.env.JWT_SECRET || 'your_jwt_secret_key',
+      process.env.JWT_SECRET || 'jarcj72hbgwu',
       { expiresIn: '7d' }
     );
     
