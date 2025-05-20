@@ -21,7 +21,6 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // MongoDB সংযোগ
 mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://admin:Kw5FmYPNbFMtWCPS@talimulcluster.irmh5p4.mongodb.net/?retryWrites=true&w=majority&appName=TalimulCluster', {
-  useNewUrlParser: true,
   useUnifiedTopology: true
 })
 .then(() => console.log('MongoDB সংযোগ সফল হয়েছে'))
