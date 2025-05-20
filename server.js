@@ -1,543 +1,268 @@
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
-const { MongoClient, ObjectId } = require("mongodb");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
+// backend/server.js - মূল সার্ভার ফাইল
 
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const dotenv = require('dotenv');
+const path = require('path');
+
+// .env ফাইল লোড করুন
+dotenv.config();
+
+// এক্সপ্রেস অ্যাপ তৈরি করুন
 const app = express();
-const port = process.env.PORT || 3001;
 
+// মিডলওয়্যার সেটআপ
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // প্রোফাইল ছবি আপলোডের জন্য লিমিট বাড়ানো
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Create uploads directory if it doesn't exist
-const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+// MongoDB সংযোগ
+mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://admin:Kw5FmYPNbFMtWCPS@talimulcluster.irmh5p4.mongodb.net/?retryWrites=true&w=majority&appName=TalimulCluster', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+.then(() => console.log('MongoDB সংযোগ সফল হয়েছে'))
+.catch(err => console.error('MongoDB সংযোগ ব্যর্থ হয়েছে:', err));
 
-// Serve static files from uploads directory
-app.use("/uploads", express.static(uploadDir));
-
-// Multer configuration for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, "profile-" + uniqueSuffix + ext);
-  },
+// ইউজার মডেল স্কিমা
+const userSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  phone: { type: String },
+  birthday: { type: Date },
+  gender: { type: String },
+  address: { type: String },
+  profilePicture: { type: String },
+  passwordLastUpdated: { type: Date, default: Date.now },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max size
-  fileFilter: function (req, file, cb) {
-    // Only accept image files
-    if (!file.mimetype.startsWith("image/")) {
-      return cb(new Error("Only images are allowed"), false);
-    }
-    cb(null, true);
-  },
-});
+const User = mongoose.model('User', userSchema);
 
-// MongoDB connection
-const uri = process.env.MONGO_URI;
-const client = new MongoClient(uri);
-
-async function connectDB() {
+// JWT টোকেন যাচাই মিডলওয়্যার
+const authenticateToken = (req, res, next) => {
   try {
-    await client.connect();
-    console.log("✅ Connected to MongoDB");
-
-    const db = client.db("userAuth");
-    const users = db.collection("users");
-
-    // JWT token verification middleware
-    function verifyToken(req, res, next) {
-      const authHeader = req.headers.authorization;
-
-      if (!authHeader) {
-        return res.status(401).json({
-          success: false,
-          message: "Authorization required",
-        });
-      }
-
-      const token = authHeader.split(" ")[1];
-
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.userId = decoded.id;
-        next();
-      } catch (error) {
-        return res.status(401).json({
-          success: false,
-          message: "Invalid token",
-        });
-      }
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ message: 'অনুরোধ করা হয়েছে কিন্তু টোকেন প্রদান করা হয়নি' });
     }
-
-    // 1. Token validation API
-    app.post("/validate-token", (req, res) => {
-      const authHeader = req.headers.authorization;
-
-      if (!authHeader) {
-        return res.json({
-          valid: false,
-        });
-      }
-
-      const token = authHeader.split(" ")[1];
-
-      try {
-        jwt.verify(token, process.env.JWT_SECRET);
-        res.json({
-          valid: true,
-        });
-      } catch (error) {
-        res.json({
-          valid: false,
-        });
-      }
-    });
-
-    // 2. User profile API
-    app.get("/user-profile", verifyToken, async (req, res) => {
-      try {
-        const userId = req.userId;
-
-        const user = await users.findOne({ _id: new ObjectId(userId) });
-
-        if (!user) {
-          return res.status(404).json({
-            success: false,
-            message: "User not found",
-          });
-        }
-
-        // Remove password from response
-        const { password, ...userWithoutPassword } = user;
-
-        res.json({
-          success: true,
-          user: userWithoutPassword,
-        });
-      } catch (error) {
-        console.error("❌ Profile fetch error:", error);
-        res.status(500).json({
-          success: false,
-          message: "Server error",
-        });
-      }
-    });
-
-    // 3. Profile picture upload API
-    app.post("/upload-profile-picture", verifyToken, upload.single("profilePicture"), async (req, res) => {
-      try {
-        if (!req.file) {
-          return res.status(400).json({
-            success: false,
-            message: "No file provided",
-          });
-        }
-
-        // File path on server
-        const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
-
-        res.json({
-          success: true,
-          message: "Picture uploaded successfully",
-          pictureUrl: fileUrl,
-        });
-      } catch (error) {
-        console.error("❌ Profile picture upload error:", error);
-        res.status(500).json({
-          success: false,
-          message: "Server error",
-        });
-      }
-    });
-
-    // 4. Profile update API
-    app.put("/update-profile", verifyToken, async (req, res) => {
-      try {
-        const userId = req.userId;
-        const { name, phone, birthday, gender, address, profilePicture } = req.body;
-
-        // Update data
-        const updateData = {
-          $set: {
-            name: name,
-            updatedAt: new Date(),
-          },
-        };
-
-        // Optional fields
-        if (phone) updateData.$set.phone = phone;
-        if (birthday) updateData.$set.birthday = birthday;
-        if (gender) updateData.$set.gender = gender;
-        if (address) updateData.$set.address = address;
-        if (profilePicture) updateData.$set.profilePicture = profilePicture;
-
-        // Update user
-        await users.updateOne({ _id: new ObjectId(userId) }, updateData);
-
-        // Get updated user data
-        const updatedUser = await users.findOne({ _id: new ObjectId(userId) });
-
-        if (!updatedUser) {
-          return res.status(404).json({
-            success: false,
-            message: "User not found",
-          });
-        }
-
-        // Remove password from response
-        const { password, ...userWithoutPassword } = updatedUser;
-
-        res.json({
-          success: true,
-          message: "Profile updated successfully",
-          user: userWithoutPassword,
-        });
-      } catch (error) {
-        console.error("❌ Profile update error:", error);
-        res.status(500).json({
-          success: false,
-          message: "Server error",
-        });
-      }
-    });
-
-    // 5. Password change API
-    app.post("/change-password", verifyToken, async (req, res) => {
-      try {
-        const userId = req.userId;
-        const { currentPassword, newPassword } = req.body;
-
-        if (!currentPassword || !newPassword) {
-          return res.status(400).json({
-            success: false,
-            message: "Provide current and new password",
-          });
-        }
-
-        // Find user
-        const user = await users.findOne({ _id: new ObjectId(userId) });
-
-        if (!user) {
-          return res.status(404).json({
-            success: false,
-            message: "User not found",
-          });
-        }
-
-        // Verify current password
-        const isMatch = await bcrypt.compare(currentPassword, user.password);
-
-        if (!isMatch) {
-          return res.status(400).json({
-            success: false,
-            message: "Current password is incorrect",
-          });
-        }
-
-        // Hash new password
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(newPassword, salt);
-
-        // Update password
-        await users.updateOne(
-          { _id: new ObjectId(userId) },
-          {
-            $set: {
-              password: hashedPassword,
-              passwordLastUpdated: new Date(),
-              updatedAt: new Date(),
-            },
-          }
-        );
-
-        // Get updated user data
-        const updatedUser = await users.findOne({ _id: new ObjectId(userId) });
-
-        // Remove password from response
-        const { password, ...userWithoutPassword } = updatedUser;
-
-        res.json({
-          success: true,
-          message: "Password changed successfully",
-          user: userWithoutPassword,
-        });
-      } catch (error) {
-        console.error("❌ Password change error:", error);
-        res.status(500).json({
-          success: false,
-          message: "Server error",
-        });
-      }
-    });
-
-    // 6. Login route
-    app.post("/login", async (req, res) => {
-      const { email, password } = req.body;
-
-      if (!email || !password) {
-        return res.status(400).json({
-          success: false,
-          message: "Email and password required",
-        });
-      }
-
-      try {
-        // Find user
-        const user = await users.findOne({ email });
-
-        if (!user) {
-          return res.json({
-            success: false,
-            message: "Incorrect email or password",
-          });
-        }
-
-        // Verify password
-        const isMatch = await bcrypt.compare(password, user.password);
-
-        if (!isMatch) {
-          return res.json({
-            success: false,
-            message: "Incorrect email or password",
-          });
-        }
-
-        // Create JWT token
-        const token = jwt.sign(
-          { id: user._id },
-          process.env.JWT_SECRET,
-          { expiresIn: "1d" }
-        );
-
-        // Remove password from response
-        const { password: userPass, ...userWithoutPassword } = user;
-
-        res.json({
-          success: true,
-          message: "Login successful",
-          user: userWithoutPassword,
-          token: token,
-        });
-      } catch (error) {
-        console.error("❌ Login error:", error);
-        res.status(500).json({
-          success: false,
-          message: "Server error",
-        });
-      }
-    });
-
-    // 7. Register route
-    app.post("/register", async (req, res) => {
-      const { name, email, password } = req.body;
-      
-      if (!name || !email || !password) {
-        return res.status(400).json({
-          success: false,
-          message: "All fields are required",
-        });
+    
+    jwt.verify(token, process.env.JWT_SECRET || 'your_jwt_secret_key', (err, user) => {
+      if (err) {
+        return res.status(403).json({ message: 'টোকেন অবৈধ বা মেয়াদ শেষ হয়েছে' });
       }
       
-      try {
-        // Check if email already exists
-        const existingUser = await users.findOne({ email });
-        
-        if (existingUser) {
-          return res.json({
-            success: false,
-            message: "An account with this email already exists",
-          });
-        }
-        
-        // Hash password
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-        
-        // Create user
-        const result = await users.insertOne({
-          name,
-          email,
-          password: hashedPassword,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          passwordLastUpdated: new Date()
-        });
-
-        // Create JWT token
-        const token = jwt.sign(
-          { id: result.insertedId },
-          process.env.JWT_SECRET,
-          { expiresIn: "1d" }
-        );
-        
-        res.json({
-          success: true,
-          message: "Registration successful",
-          userId: result.insertedId,
-          token: token
-        });
-      } catch (error) {
-        console.error("❌ Registration error:", error);
-        res.status(500).json({
-          success: false,
-          message: "Server error",
-        });
-      }
+      req.user = user;
+      next();
     });
-
-    // 8. Email check API for registration
-    app.post("/check-email", async (req, res) => {
-      const { email } = req.body;
-      
-      if (!email) {
-        return res.status(400).json({
-          success: false,
-          message: "Email is required",
-        });
-      }
-      
-      try {
-        const existingUser = await users.findOne({ email });
-        
-        return res.json({
-          exists: !!existingUser,
-          message: existingUser ? "Email already exists" : "Email is available"
-        });
-      } catch (error) {
-        console.error("❌ Email check error:", error);
-        return res.status(500).json({
-          success: false,
-          message: "Server error",
-        });
-      }
-    });
-
-    // 9. OTP send API
-    app.post("/send-otp", async (req, res) => {
-      const { email } = req.body;
-      
-      if (!email) {
-        return res.status(400).json({
-          success: false,
-          message: "Email is required",
-        });
-      }
-      
-      try {
-        // Generate a random 6-digit OTP
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        
-        // Store OTP in database with expiration (10 minutes)
-        await users.updateOne(
-          { email },
-          { 
-            $set: {
-              otp: otp,
-              otpExpires: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
-            }
-          },
-          { upsert: true }
-        );
-        
-        // In production, send email with OTP
-        console.log(`OTP for ${email}: ${otp}`);
-        
-        res.json({
-          success: true,
-          message: "OTP sent successfully"
-        });
-      } catch (error) {
-        console.error("❌ OTP send error:", error);
-        return res.status(500).json({
-          success: false,
-          message: "Server error",
-        });
-      }
-    });
-
-    // 10. OTP verification API
-    app.post("/verify-otp", async (req, res) => {
-      const { email, otp } = req.body;
-      
-      if (!email || !otp) {
-        return res.status(400).json({
-          success: false,
-          message: "Email and OTP are required",
-        });
-      }
-      
-      try {
-        const user = await users.findOne({ 
-          email,
-          otp: otp,
-          otpExpires: { $gt: new Date() }
-        });
-        
-        if (!user) {
-          return res.json({
-            success: false,
-            message: "Invalid or expired OTP",
-          });
-        }
-        
-        // Clear OTP after successful verification
-        await users.updateOne(
-          { email },
-          { 
-            $unset: {
-              otp: "",
-              otpExpires: ""
-            }
-          }
-        );
-        
-        res.json({
-          success: true,
-          message: "OTP verified successfully"
-        });
-      } catch (error) {
-        console.error("❌ OTP verification error:", error);
-        return res.status(500).json({
-          success: false,
-          message: "Server error",
-        });
-      }
-    });
-
-    // Test route
-    app.get("/", (req, res) => {
-      res.send("Profile server is running! 🚀");
-    });
-  } catch (err) {
-    console.error("❌ Database connection error:", err);
+  } catch (error) {
+    console.error('Authentication error:', error);
+    res.status(500).json({ message: 'অ্যাকাউন্ট যাচাইকরণে ত্রুটি ঘটেছে' });
   }
-}
+};
 
-// Start server
-connectDB().then(() => {
-  app.listen(port, () => {
-    console.log(`🚀 Server running on port ${port}`);
-  });
+// নতুন ব্যবহারকারী নিবন্ধন
+app.post('/api/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    
+    // ইমেইল যাচাই করুন
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'এই ইমেইল দিয়ে ইতিমধ্যে একটি অ্যাকাউন্ট রয়েছে' });
+    }
+    
+    // পাসওয়ার্ড হ্যাশ করুন
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // নতুন ইউজার তৈরি করুন
+    const newUser = new User({
+      name,
+      email,
+      password: hashedPassword
+    });
+    
+    await newUser.save();
+    
+    // JWT টোকেন তৈরি করুন
+    const token = jwt.sign(
+      { id: newUser._id, email: newUser.email },
+      process.env.JWT_SECRET || 'your_jwt_secret_key',
+      { expiresIn: '7d' }
+    );
+    
+    // পাসওয়ার্ড ছাড়া ইউজার ডাটা পাঠান
+    const userData = {
+      _id: newUser._id,
+      name: newUser.name,
+      email: newUser.email,
+      phone: newUser.phone,
+      birthday: newUser.birthday,
+      gender: newUser.gender,
+      address: newUser.address,
+      profilePicture: newUser.profilePicture,
+      passwordLastUpdated: newUser.passwordLastUpdated
+    };
+    
+    res.status(201).json({
+      message: 'ব্যবহারকারী সফলভাবে নিবন্ধিত হয়েছে',
+      token,
+      user: userData
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ message: 'নিবন্ধন প্রক্রিয়ায় ত্রুটি ঘটেছে' });
+  }
 });
 
-// Handle server shutdown
-process.on("SIGINT", async () => {
-  await client.close();
-  console.log("MongoDB connection closed");
-  process.exit(0);
+// ব্যবহারকারী লগইন
+app.post('/api/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    // ইউজার খুঁজুন
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: 'ইমেইল বা পাসওয়ার্ড ভুল' });
+    }
+    
+    // পাসওয়ার্ড যাচাই করুন
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: 'ইমেইল বা পাসওয়ার্ড ভুল' });
+    }
+    
+    // JWT টোকেন তৈরি করুন
+    const token = jwt.sign(
+      { id: user._id, email: user.email },
+      process.env.JWT_SECRET || 'your_jwt_secret_key',
+      { expiresIn: '7d' }
+    );
+    
+    // পাসওয়ার্ড ছাড়া ইউজার ডাটা পাঠান
+    const userData = {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      birthday: user.birthday,
+      gender: user.gender,
+      address: user.address,
+      profilePicture: user.profilePicture,
+      passwordLastUpdated: user.passwordLastUpdated
+    };
+    
+    res.status(200).json({
+      message: 'সফলভাবে লগইন হয়েছে',
+      token,
+      user: userData
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ message: 'লগইন প্রক্রিয়ায় ত্রুটি ঘটেছে' });
+  }
+});
+
+// প্রোফাইল আপডেট
+app.post('/api/update-profile', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { name, phone, birthday, gender, address, profilePicture } = req.body;
+    
+    // ইউজার আপডেট করুন
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      {
+        $set: {
+          name: name,
+          phone: phone,
+          birthday: birthday,
+          gender: gender,
+          address: address,
+          profilePicture: profilePicture,
+          updatedAt: new Date()
+        }
+      },
+      { new: true, select: '-password' } // আপডেট হওয়া ডাটা ফেরত দিন, পাসওয়ার্ড বাদ দিয়ে
+    );
+    
+    if (!updatedUser) {
+      return res.status(404).json({ message: 'ব্যবহারকারী পাওয়া যায়নি' });
+    }
+    
+    res.status(200).json({
+      message: 'প্রোফাইল সফলভাবে আপডেট করা হয়েছে',
+      user: updatedUser
+    });
+  } catch (error) {
+    console.error('Profile update error:', error);
+    res.status(500).json({ message: 'প্রোফাইল আপডেট করতে ত্রুটি ঘটেছে' });
+  }
+});
+
+// পাসওয়ার্ড পরিবর্তন
+app.post('/api/change-password', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { currentPassword, newPassword } = req.body;
+    
+    // ইউজার খুঁজুন
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'ব্যবহারকারী পাওয়া যায়নি' });
+    }
+    
+    // বর্তমান পাসওয়ার্ড যাচাই করুন
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: 'বর্তমান পাসওয়ার্ড ভুল' });
+    }
+    
+    // নতুন পাসওয়ার্ড হ্যাশ করুন
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    
+    // পাসওয়ার্ড আপডেট করুন
+    user.password = hashedNewPassword;
+    user.passwordLastUpdated = new Date();
+    user.updatedAt = new Date();
+    
+    await user.save();
+    
+    res.status(200).json({ message: 'পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে' });
+  } catch (error) {
+    console.error('Password change error:', error);
+    res.status(500).json({ message: 'পাসওয়ার্ড পরিবর্তন করতে ত্রুটি ঘটেছে' });
+  }
+});
+
+// প্রোফাইল তথ্য পান
+app.get('/api/profile', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // ইউজার খুঁজুন, পাসওয়ার্ড বাদ দিয়ে 
+    const user = await User.findById(userId).select('-password');
+    
+    if (!user) {
+      return res.status(404).json({ message: 'ব্যবহারকারী পাওয়া যায়নি' });
+    }
+    
+    res.status(200).json({ user });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ message: 'প্রোফাইল তথ্য আনতে ত্রুটি ঘটেছে' });
+  }
+});
+
+// সার্ভার শুরু করুন
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`সার্ভার চালু আছে পোর্ট ${PORT} এ`);
 });
